@@ -30,31 +30,50 @@ import android.app.Service;
 import static de.robv.android.xposed.XposedHelpers.*;
 
 public class DisableAntiPiracy implements IXposedHookLoadPackage {
+
+    private boolean isAntiPiracy(String clazz) {
+        return (clazz.equals("org.antipiracy.support.AntiPiracyInstallReceiver") ||
+                clazz.equals("org.antipiracy.support.AntiPiracyNotifyService") ||
+                clazz.equals("org.antipiracy.support.ContentGuardInstallReceiver") ||
+                clazz.equals("org.antipiracy.support.ContentGuardNotifyService"));
+    }
+
     @Override
     public void handleLoadPackage(final LoadPackageParam lpparam) throws Throwable {
+
         // Intercept services
         if (lpparam.packageName.equals("com.android.settings")) {
-            findAndHookMethod("org.antipiracy.support.AntiPiracyInstallReceiver", lpparam.classLoader,
-                    "onReceive", Context.class, Intent.class, XC_MethodReplacement.returnConstant(null));
-            findAndHookMethod("org.antipiracy.support.AntiPiracyNotifyService", lpparam.classLoader,
-                    "onStartCommand", Intent.class, int.class, int.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            callMethod(param.thisObject, "shutdown");
-                            param.setResult(Service.START_NOT_STICKY);
-                        }
-                    });
+            Class installReceiver, notifyService;
+            try {
+                installReceiver = findClass("org.antipiracy.support.ContentGuardInstallReceiver", lpparam.classLoader);
+                notifyService = findClass("org.antipiracy.support.ContentGuardNotifyService", lpparam.classLoader);
+            } catch (ClassNotFoundError e1) {
+                try {
+                    installReceiver = findClass("org.antipiracy.support.AntiPiracyInstallReceiver", lpparam.classLoader);
+                    notifyService = findClass("org.antipiracy.support.AntiPiracyNotifyService", lpparam.classLoader);
+                } catch (ClassNotFoundError e2) {
+                    XposedBridge.log("AntiPiracy not found");
+                    return;
+                }
+            }
+            findAndHookMethod(installReceiver, "onReceive", Context.class, Intent.class, XC_MethodReplacement.returnConstant(null));
+            findAndHookMethod(notifyService, "onStartCommand", Intent.class, int.class, int.class, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    callMethod(param.thisObject, "shutdown");
+                    param.setResult(Service.START_NOT_STICKY);
+                }
+            });
         }
 
-        // Enable disabling services
         if (lpparam.packageName.equals("android")) {
+            // Enable disabling services
             findAndHookMethod("com.android.server.pm.PackageManagerService", lpparam.classLoader,
                     "setComponentEnabledSetting", ComponentName.class, int.class, int.class, int.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                             ComponentName componentName = (ComponentName) param.args[0];
-                            if (componentName.getClassName().equals("org.antipiracy.support.AntiPiracyNotifyService")
-                                    || componentName.getClassName().equals("org.antipiracy.support.AntiPiracyInstallReceiver")) {
+                            if (isAntiPiracy(componentName.getClassName())) {
                                 Object sUserManager = getObjectField(param.thisObject, "sUserManager");
                                 if ((boolean) callMethod(sUserManager, "exists", param.args[3])) {
                                     callMethod(param.thisObject, "setEnabledSetting", componentName.getPackageName(),
@@ -64,17 +83,14 @@ public class DisableAntiPiracy implements IXposedHookLoadPackage {
                             }
                         }
                     });
-        }
 
-        // Disable enabling services
-        if (lpparam.packageName.equals("android")) {
+            // Disable enabling services
             findAndHookMethod("com.android.server.pm.PackageSettingBase", lpparam.classLoader,
                     "enableComponentLPw", String.class, int.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                             String componentClassName = (String) param.args[0];
-                            if (componentClassName.equals("org.antipiracy.support.AntiPiracyNotifyService")
-                                    || componentClassName.equals("org.antipiracy.support.AntiPiracyInstallReceiver")) {
+                            if (isAntiPiracy(componentClassName)) {
                                 param.setResult(false);
                             }
                         }
